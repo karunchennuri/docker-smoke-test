@@ -1,0 +1,103 @@
+---
+resources:
+- name: every-30s
+  type: time
+  icon: clock-outline
+  source:
+    interval: 30s
+- name: slack-alert
+  type: slack-notification
+  source:
+    url: ((slack_notification_url))
+
+resource_types:
+  - name: slack-notification
+    type: docker-image
+    source:
+      repository: cfcommunity/slack-notification-resource
+      tag: v1.3.0
+
+jobs:
+  - name: docker-health-smoke-test
+    public: true
+    plan:
+    - get: every-30s
+      trigger: true
+    - task: simple-task
+      on_failure:
+        put: slack-alert
+        params:
+          channel: '#demo'
+          username: 'concourse'
+          icon_emoji: ":fire:"
+          silent: false
+          text: |
+              Docker Container Smoke Test FAILED - *$BUILD_PIPELINE_NAME/$BUILD_JOB_NAME* ($BUILD_NAME) FAILED
+              https://localhost:8080/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+
+      config:
+        platform: linux
+        image_resource:
+          type: registry-image
+          source: { repository: busybox }
+        run:
+          path: echo
+          args: ["Docker cluster is healthy!"]
+  - name: go-app-smoke-test
+    public: true
+    plan:
+    - get: every-30s
+      trigger: true
+    - task: call-go-app
+      on_failure:
+        put: slack-alert
+        params:
+          channel: '#demo'
+          username: 'concourse'
+          icon_emoji: ":fire:"
+          silent: false
+          text: |
+              Go App Smoke Test FAILED - *$BUILD_PIPELINE_NAME/$BUILD_JOB_NAME* ($BUILD_NAME) FAILED
+              https://localhost:8080/teams/$BUILD_TEAM_NAME/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME
+    
+      config:
+        platform: linux
+        image_resource:
+          type: docker-image
+          source:
+            # repository: busybox
+            # repository: yauritux/busybox-curl
+            repository: curlimages/curl
+            tag: 7.68.0
+        outputs:
+        - name: workspace
+        run:
+          path: /bin/sh
+          args:
+          - -c
+          - |
+            # apk update && apk add curl curl-dev bash
+            export curl_output=`curl -L http://172.17.5.156:8888`
+            echo "Output of curl is: $curl_output"
+
+            touch $HOME/app.sh
+            cat << EOF > $HOME/app.sh
+            #!/bin/bash
+            if [ "$curl_output" == "Hello I am Go App!" ];
+            then
+               echo "Go App is Alive!"
+               exit 0
+            else
+               echo "Go App is Dead!"
+               exit 1
+            fi            
+            EOF
+
+            echo "Home directory path:"
+            pwd
+
+            chmod +x $HOME/app.sh
+            cat $HOME/app.sh
+            echo "Shell Script Executing:"
+            echo $HOME
+            sh $HOME/app.sh
